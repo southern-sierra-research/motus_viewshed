@@ -1,0 +1,185 @@
+---
+title: "motus_viewshed"
+author: "fork of code by adamdsmith on GitHub"
+date: "10/18/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Source
+
+https://github.com/adamdsmith/motus_viewshed
+
+I forked this repo and then cloned it into /d/PatrickLorch/MotusGeneral/rmotus_work with 
+`git clone https://github.com/southern-sierra-research/motus_viewshed.git`
+
+```{r cars}
+source("D:/PatrickLorch/MotusGeneral/rmotus_work/motus_viewshed/R/motus_viewshed.R")
+source("D:/PatrickLorch/MotusGeneral/rmotus_work/motus_viewshed/R/motus_prop_viewshed_visible.R")
+
+# Example for Red Tail Hill in Kern River valley
+# RTH motus_prop_viewshed_visible(coords= c(35.6837, -118.3053), ht = 10)
+motus_prop_viewshed_visible(coords= c(37.176130, -120.802421), ht = 10) # San Luis NWR
+motus_viewshed(coords= c(37.176130, -120.802421), ht = 10) # San Luis NWR
+motus_prop_viewshed_visible(coords= c(35.478637, -118.211096), ht = 10) # Tunnel Spring
+motus_viewshed(coords= c(35.478637, -118.211096), ht = 10) # Tunnel Spring
+motus_prop_viewshed_visible(coords= c(37.176130, -120.802421), ht = 10) # San Luis NWR
+motus_viewshed(coords= c(37.176130, -120.802421), ht = 10) # San Luis NWR
+motus_prop_viewshed_visible(coords= c(37.176130, -120.802421), ht = 10) # San Luis NWR
+motus_viewshed(coords= c(37.176130, -120.802421), ht = 10) # San Luis NWR
+motus_prop_viewshed_visible(coords= c(37.176130, -120.802421), ht = 10) # San Luis NWR
+motus_viewshed(coords= c(37.176130, -120.802421), ht = 10) # San Luis NWR
+
+I still need to limit this to just the area that is not obscured at that point, 
+but doing viewsheds in R is tougher than I thought.
+
+```
+
+
+## Viewshed package testing
+
+What I tried but did not use.
+
+### Rayshader
+
+https://www.rayshader.com/
+
+Does not work because it fixes angle and compas direction of sun.
+
+```{r rayshader}
+# To install the latest version from Github:
+# install.packages("devtools")
+devtools::install_github("tylermorganwall/rayshader")
+library(rayshader)
+library(dplyr)
+```
+
+
+### r.viewshed in GRASS
+
+This will work, but we have to figure out how to launch GRASS from within R
+
+https://grasswiki.osgeo.org/wiki/R_statistics/rgrass7
+
+Does not work unless you already have a grass workspace and database set up.
+
+```{r grass}
+# install.packages("rgrass7")
+library(rgrass7)
+
+initGRASS(gisBase = "C:\Program Files\QGIS 3.20.3\bin\grass78.bat",
+         gisDbase = "C:\Users\PatrickLorch\Documents\grassdata",
+         location = "nc_spm_08_grass7", 
+         mapset = "user1", 
+         SG="elevation")
+
+```
+
+### stackoverflow solution
+
+https://stackoverflow.com/questions/21841387/r-code-that-evaluates-line-of-sight-los-between-two-lat-lon-points
+
+This requires the xy coordinates to be in easting and northing for pythagorean
+theorum to be used.
+
+```{r viewshed}
+# Get a raster of elevations
+coords = c(35.6837, -118.3053)
+ht = 10
+zoom = 10
+lon <- coords[2]; lat <- coords[1]
+coords <- cbind(lon, lat)
+prj <- sprintf("+proj=laea +x_0=0 +y_0=0 +lon_0=%f +lat_0=%f", lon, lat)
+
+pt_ll <- sp::SpatialPoints(coords, sp::CRS("+init=epsg:4326"))
+pt <- sp::spTransform(pt_ll, sp::CRS(prj))
+poly20 <- rgeos::gBuffer(pt, width = 20000, quadsegs = 12)
+
+# Get DEM
+suppressWarnings(
+  suppressMessages(
+    elev <- elevatr::get_elev_raster(poly20, z = zoom, clip = "locations", verbose = FALSE)
+  )
+)
+
+rasterprofile <- function(r, xy1, xy2){
+### sample a raster along a straight line between two points
+### try to match the sampling size to the raster resolution
+    dx = sqrt( (xy1[1]-xy2[1])^2 + (xy1[2]-xy2[2])^2 )
+    nsteps = 1 + round(dx/ min(res(r)))
+    xc = xy1[1] + (0:nsteps) * (xy2[1]-xy1[1])/nsteps
+    yc = xy1[2] + (0:nsteps) * (xy2[2]-xy1[2])/nsteps
+    data.frame(x=xc, y=yc, z=r[cellFromXY(r,cbind(xc,yc))])
+}
+
+cansee <- function(r, xy1, xy2, h1=0, h2=0){
+### can xy1 see xy2 on DEM r?
+### r is a DEM in same x,y, z units
+### xy1 and xy2 are 2-length vectors of x,y coords
+### h1 and h2 are extra height offsets
+###  (eg top of mast, observer on a ladder etc)
+    xyz = rasterprofile(r, xy1, xy2)
+    np = nrow(xyz)-1
+    h1 = xyz$z[1] + h1
+    h2 = xyz$z[np] + h2
+    hpath = h1 + (0:np)*(h2-h1)/np
+    return(!any(hpath < xyz$z))
+}
+
+viewTo <- function(r, xy, xy2, h1=0, h2=0, progress="none"){
+    ## xy2 is a matrix of x,y coords (not a data frame)
+    require(plyr)
+    aaply(xy2, 1, function(d){cansee(r,xy,d,h1,h2)}, .progress=progress)
+}
+
+
+
+```
+
+## View-cone proportion
+
+If the viewshed is represented as a cone, with the antenna direction being the 
+center of the cone, a verticle cross section is an isosceles triangle and an 
+approximation of the viewshed in any given direction.  We calculate the width 
+of the cone at each distance (h) as an approximation of the potential viewshed 
+at any distance (2*b below).  If the difference between the antenna elevation 
+and the pixel elevation (de) is less than 2*b, we can use (2*b - de)/ 2*b to 
+represent the fraction of the potential viewshed at each point.  
+
+To improve this estimate, we can represent the potential viewshed as something
+more like the actual antenna sensetivity.  So we could replace the current
+linear function of distance from the antenna, we can use one that initially
+increased with distance and then decreases with further distance.  This same
+function can be used to weight the estimate to account for the 3D shape of the
+detection bubble.
+
+The other enhancement that would be nice would be to use rayshader package to 
+do the above calculations only at points not blocked from view.
+
+Yet another enhancement would be to find other points that would give a better
+fraction of the the potential viewshed in a given direction or set of
+directions.
+
+For now we use `halfangle` to represent how wide the cone is (2*halfangle).
+
+```{r vcprop}
+vcprop = function(halfangle = 10, antht, h){
+# halfangle = half of the angle of view of antenna detection cone
+# h = distance from antenna
+# pe = pixel elevation, 
+# antht = antenna height above sea level (elevation + height above ground)
+# all in meters
+  b = tan(halfangle) * h
+  de = pe - antht
+  if(de < 2*b)
+    fpvs = (2*b - de)/ 2*b
+  else
+    fpvs = 0
+  return(fpvs)
+}
+
+```
+
